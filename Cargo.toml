@@ -6,6 +6,7 @@ authors = ["Stacey Ell <stacey.ell@gmail.com>"]
 [dependencies]
 serde = "*"
 serde_json = "*"
+# serde_macros = "*"
 
 [dependencies.phf]
 git = "https://github.com/sfackler/rust-phf.git"

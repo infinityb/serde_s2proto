@@ -593,7 +593,9 @@ impl PrimitiveInt for u8 {
         let (_, byte) = item;
         println!("read byte = {:?}", byte);
 
-        let negative = (byte & 1) == 1;
+        if (byte & 1) == 1 {
+            return Err(())
+        }
         let mut result: u64 = (byte as u64 >> 1) & 0x3F;
         let mut bits = 6;
 
@@ -620,7 +622,9 @@ impl PrimitiveInt for u32 {
         let mut item = byte_iter.next().unwrap();
         let (_, byte) = item;
 
-        let negative = (byte & 1) == 1;
+        if (byte & 1) == 1 {
+            return Err(())
+        }
         let mut result: u32 = (byte as u32 >> 1) & 0x3F;
         let mut bits = 6;
 
@@ -643,7 +647,9 @@ impl PrimitiveInt for u64 {
         let mut item = byte_iter.next().unwrap();
         let (_, byte) = item;
 
-        let negative = (byte & 1) == 1;
+        if (byte & 1) == 1 {
+            return Err(())
+        }
         let mut result: u64 = (byte as u64 >> 1) & 0x3F;
         let mut bits = 6;
 
@@ -667,7 +673,9 @@ impl PrimitiveInt for usize {
         let mut item = byte_iter.next().unwrap();
         let (_, byte) = item;
 
-        let negative = (byte & 1) == 1;
+        if (byte & 1) == 1 {
+            return Err(())
+        }
         let mut result: usize = (byte as usize >> 1) & 0x3F;
         let mut bits = 6;
 

@@ -14,6 +14,8 @@ pub struct Color {
     pub b: u8,
 }
 
+// hand-implemented stuff that the macros can probably do -->
+
 impl serde::Deserialize for Color {
     fn deserialize<D>(deserializer: &mut D) -> Result<Color, D::Error>
         where D: serde::de::Deserializer
