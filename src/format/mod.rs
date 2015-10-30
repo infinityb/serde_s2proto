@@ -64,6 +64,7 @@ pub struct Struct {
     pub fields: &'static [StructField],
 }
 
+#[derive(Debug)]
 pub enum TypeInfo {
     Array {
         bounds: IntBounds,

@@ -37,7 +37,7 @@ impl serde::de::Visitor for ColorVersionVisitor {
 enum ColorField {
     A,
     R,
-    G, 
+    G,
     B,
 }
 
@@ -50,26 +50,9 @@ impl serde::Deserialize for ColorField {
         impl serde::de::Visitor for ColorFieldVisitor {
             type Value = ColorField;
 
-            fn visit_bool<E>(&mut self, v: bool) -> Result<Self::Value, E> where E: serde::de::Error {
-                panic!("visit_bool: {:?}", v);
-            }
-
-            fn visit_isize<E>(&mut self, v: isize) -> Result<Self::Value, E> where E: serde::de::Error {
-                panic!("visit_isize: {:?}", v);
-            }
-
-            fn visit_i32<E>(&mut self, v: i32) -> Result<Self::Value, E> where E: serde::de::Error {
-                panic!("visit_i32: {:?}", v);
-            }
-
-            fn visit_string<E>(&mut self, v: String) -> Result<Self::Value, E> where E: serde::de::Error {
-                panic!("visit_string: {:?}", v);
-            }
-
             fn visit_str<E>(&mut self, value: &str) -> Result<ColorField, E>
                 where E: serde::de::Error
             {
-                println!("ColorFieldVisitor::visit_str({:?})", value);
                 match value {
                     "m_a" => Ok(ColorField::A),
                     "m_r" => Ok(ColorField::R),
@@ -79,8 +62,6 @@ impl serde::Deserialize for ColorField {
                 }
             }
         }
-
-        println!("setting up ColorField Deserialization");
         deserializer.visit(ColorFieldVisitor)
     }
 }
@@ -99,15 +80,7 @@ impl serde::de::Visitor for ColorVisitor {
         let mut b = None;
 
         loop {
-            
-            println!("iterating on map visitor");
-            let key_vis = visitor.visit_key();
-            println!("key_vis.ok() => {:?}", key_vis.as_ref().ok());
-            if key_vis.is_err() {
-                panic!("key_vis is error");
-            }
-
-            match try!(key_vis) {
+            match try!(visitor.visit_key()) {
                 Some(ColorField::A) => {
                     let val = try!(visitor.visit_value());
                     println!("setting a channel = {}", val);

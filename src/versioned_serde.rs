@@ -18,7 +18,7 @@ pub enum ErrorCode {
     KeyMustBeABytes,    
     UnsupportedType(u8),
     UnexpectedType,
-    InvalidByte,
+    InvalidByte(u8),
     InvalidTag(i32),
     TrailingCharacters,
     ExcessiveAllocation,
@@ -36,6 +36,7 @@ pub enum Error {
 impl serde::de::Error for Error {
     fn syntax(err_str: &str) -> Error {
         // panic!("error str: {}", err_str);
+        ::quux();
         Error::SyntaxError(ErrorCode::Unknown, 0, 0)
     }
 
@@ -68,10 +69,11 @@ impl From<serde::de::value::Error> for Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct Deserializer {
-    offset: usize, // in bits
+    offset: usize,
     buffer: Vec<u8>,
     typeinfos: &'static [TypeInfo],
-    root_typeinfo: usize,
+    typestack: Vec<&'static TypeInfo>,
+    // root_typeinfo: usize,
 }
 
 impl Deserializer {
@@ -80,153 +82,194 @@ impl Deserializer {
             offset: 0,
             buffer: buf.to_vec(),
             typeinfos: typeinfos,
-            root_typeinfo: root_typeinfo,
+            typestack: vec![&typeinfos[root_typeinfo]],
         }
     }
 
-    // TODO: generic over output ints
-    fn read_bits(&mut self, bitlen: u8) -> Result<i64> {
-        if bitlen % 8 != 0 {
-            unimplemented!();
-        }
-        if self.offset % 8 != 0 {
-            unimplemented!();
-        }
-        let start = self.offset / 8;
-        let end = start + (bitlen / 8) as usize;
-        self.offset += bitlen as usize;
-
-        if self.buffer.len() < end{
+    fn read_byte(&mut self) -> Result<u8> {
+        if self.buffer.len() <= self.offset {
             return Err(Error::SyntaxError(ErrorCode::UnexpectedEOF, 0, 0));
         }
-
-        let mut output: i64 = 0;
-        for i in start..end {
-            output = output << 8;
-            output += self.buffer[i] as i64;
-        }
-        Ok(output)
+        let byte = self.buffer[self.offset];
+        self.offset += 1;
+        Ok(byte)
     }
+
+    // // TODO: generic over output ints
+    // fn read_bit(&mut self, bitlen: u8) -> Result<i64> {
+    //     if bitlen % 8 != 0 {
+    //         unimplemented!();
+    //     }
+    //     if self.offset % 8 != 0 {
+    //         unimplemented!();
+    //     }
+    //     let end = start + (bitlen / 8) as usize;
+    //     self.offset += bitlen as usize;
+
+    //     if self.buffer.len() < end{
+    //         return Err(Error::SyntaxError(ErrorCode::UnexpectedEOF, 0, 0));
+    //     }
+
+    //     let mut output: i64 = 0;
+    //     for i in start..end {
+    //         output = output << 8;
+    //         output += self.buffer[i] as i64;
+    //     }
+    //     Ok(output)
+    // }
 
     fn expect_skip(&mut self, expected: u8) -> Result<()> {
-        if self.offset % 8 != 0 {
-            unimplemented!();
-        }
-        if try!(self.read_bits(8)) == expected as i64 {
+        let got = try!(self.read_byte());
+        if got == expected {
             Ok(())
         } else {
-            Err(Error::SyntaxError(ErrorCode::InvalidByte, 0, 0))
+            Err(Error::SyntaxError(
+                ErrorCode::InvalidByte(got),
+                self.offset, self.offset + 1))
         }
     }
 
-    // TODO: generic over output ints
     fn parse_vint<T>(&mut self) -> Result<T> where T: PrimitiveInt {
+        let pre_offset = self.offset;
         let mut buffer: [u8; 20] = [0; 20];
         for byte in buffer.iter_mut() {
-            *byte = try!(self.read_bits(8)) as u8;
+            *byte = try!(self.read_byte());
             if (*byte & 0x80) == 0 {
                 break;
             }
         }
 
-        // FIXME: error
-        T::from_vint_buf(&buffer)
-            .map_err(|_| Error::SyntaxError(ErrorCode::InvalidByte, 0, 0))
+        let err = Error::SyntaxError(ErrorCode::Unknown, pre_offset, self.offset);
+        T::from_vint_buf(&buffer).map_err(|_| err)
     }
 
-    pub fn root(&mut self) -> Result<Vec<String>> {
-        let rt = self.root_typeinfo as u32;
-        self.instance(rt)
+    fn top_typeinfo(&self) -> Result<&'static TypeInfo> {
+        // it is a logic error to have an empty typestack
+        let last_ti: &'static TypeInfo = *self.typestack.last().unwrap();
+
+        Ok(last_ti)
     }
 
-    pub fn instance(&mut self, typeid: TypeId) -> Result<Vec<String>> {
-        match self.typeinfos[typeid as usize] {
-            TypeInfo::Struct(st) => self.struct_(st),
-            TypeInfo::Int { bounds } => self.int(bounds),
-            TypeInfo::Blob { len } => self.blob(len),
-            _ => panic!(),
-        }
-    }
+    // fn last_typeinfo_as_struct(&self) -> Result<Struct> {
+    //     // it is a logic error to have an empty typestack
+    //     
 
-    pub fn blob(&mut self, len: IntBounds) -> Result<Vec<String>> {
-        try!(self.expect_skip(2));
-        let length = try!(self.parse_vint::<u32>()) as usize;
-        let start = self.offset / 8;
-        self.offset += length * 8;
-        let end = start + length;
-        Ok(vec![
-            format!("{:?}", &self.buffer[start..end])
-        ])
-    }
-
-    pub fn int(&mut self, bounds: IntBounds) -> Result<Vec<String>> {
-        try!(self.expect_skip(9));
-        let value = bounds.min + try!(self.parse_vint::<i64>());
-        Ok(vec![format!("{}", value)])
-    }
-
-    pub fn struct_(&mut self, st: Struct) -> Result<Vec<String>> {
-        try!(self.expect_skip(5));
-        let length: u32 = try!(self.parse_vint());
-        println!("reading struct of len={}: {:?}", length, st);
-
-        let mut output = Vec::new();
-        for i in 0..length {
-            let tag: i32 = try!(self.parse_vint());
-            println!("   tag={} @ idx={}", tag, i);
-            let invalid = Error::SyntaxError(ErrorCode::InvalidTag(tag), 0, 0);
-            let field_info = try!(find_struct_field(st, tag).ok_or(invalid));
-            let child = try!(self.instance(field_info.1));
-            let emit = format!("{:?} => {:?}", field_info.0, child);
-            println!("EMIT {}", emit);
-            output.push(emit);
-        }
-        return Ok(output);
-
-        fn find_struct_field(st: Struct, tag: i32) -> Option<StructField> {
-            for field in st.fields.iter() {
-                if field.2 == tag {
-                    return Some(*field)
-                }
-            }
-            None
-        }
-    }
+    //     match *last_ti {
+    //         TypeInfo::Struct(sd) => Ok(sd),
+    //         _ => Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
+    //     }
+    // }
 }
 
-impl serde::Deserializer for Deserializer {
+impl serde::de::Deserializer for Deserializer {
     type Error = Error;
 
     #[inline]
     fn visit<V>(&mut self, mut visitor: V) -> Result<V::Value>
         where V: serde::de::Visitor,
     {
-        let typeid = try!(self.read_bits(8)) as u8;
+        let pre_offset = self.offset;
+        let typeid = try!(self.read_byte());
+        println!("deserializer found a type id of {:?} at offset {}", typeid, pre_offset);
+        let no_support = Error::SyntaxError(ErrorCode::UnsupportedType(typeid), 0, 0);
         match typeid {
-            0x02 => {
+            0x00 => {
+                // array
                 let length = try!(self.parse_vint::<u32>()) as usize;
-                let start = self.offset / 8;
-                self.offset += length * 8;
-                let end = start + length;
-                visitor.visit_bytes(&self.buffer[start..end])
-            },
-            0x05 => {
-                let struct_def = match self.typeinfos[self.root_typeinfo] {
-                    TypeInfo::Struct(sd) => sd,
+                println!("visiting array of length {}", length);
+                let start = self.offset;
+                println!("array data = {:?}", &self.buffer[start..]);
+
+                let opt_typinfo = try!(self.top_typeinfo());
+                let typeid = match *opt_typinfo {
+                    TypeInfo::Array { typeid, .. } => typeid,
                     _ => return Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
                 };
+                let typeinfo: &'static TypeInfo = &self.typeinfos[typeid as usize];
+                println!("ArrayVisitor will visit types of : {:?}", typeinfo);
+                visitor.visit_seq(ArrayVisitor::new(self, length, typeinfo))
+            }
+            0x01 => {
+                // bitarray
+                Err(no_support)
+            }
+            0x02 => {
+                // blob
                 let length = try!(self.parse_vint::<u32>()) as usize;
-                let root_ti = self.root_typeinfo;
-                let x = visitor.visit_map(StructVisitor::new(self, struct_def, root_ti, length));
+                println!("visiting blob of length {}", length);
+                let start = self.offset;
+                self.offset += length;
+                let buf = &self.buffer[start..self.offset];
+                match ::std::str::from_utf8(buf) {
+                    Ok(str_val) => visitor.visit_str(str_val),
+                    Err(_) => {
+                        let res0: Result<V::Value> = visitor.visit_bytes(buf);
+                        res0.or_else(|_| visitor.visit_string(format!("{:?}", buf)))
+                    }
+                }
+            },
+            0x03 => {
+                // choice aka enum
+                println!("visiting choice");
+                Err(no_support)
+            },
+            0x04 => {
+                // optional
+                let is_some = try!(self.read_byte()) != 0;
+                println!("visiting option - is_some? => {}", is_some);
+                if !is_some {
+                    return visitor.visit_none();
+                }
 
-                println!("lol x.is_ok() = {:?}", x.is_ok());
-                x
+                let opt_typinfo = try!(self.top_typeinfo());
+                let typeid = match *opt_typinfo {
+                    TypeInfo::Optional { typeid } => typeid,
+                    _ => return Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
+                };
+
+                let typeinfo: &'static TypeInfo = &self.typeinfos[typeid as usize];
+                println!("  visiting option : next type = {:?}", typeinfo);
+                self.typestack.push(typeinfo);
+                let result = visitor.visit_some(self);
+                assert_eq!(self.typestack.pop().unwrap() as *const TypeInfo, typeinfo as *const TypeInfo);
+                result
+            }
+            0x05 => {
+                let length = try!(self.parse_vint::<u32>()) as usize;
+                println!("visiting struct of length {}", length);
+                visitor.visit_map(StructVisitor::new(self, length))
+            },
+            0x06 => {
+                let boolbyte = try!(self.read_byte());
+                visitor.visit_bool(boolbyte != 0)
+            },
+            0x07 => {
+                // FourCC or real32
+                let start = self.offset;
+                self.offset += 4;
+                let buf = &self.buffer[start..self.offset];
+
+                let buffer = format!("{:?}", buf);
+                println!("new fourcc = {:?}", buffer);
+                visitor.visit_string(buffer)
+            },
+            0x08 => {
+                // real64
+                Err(no_support)
             },
             0x09 => {
+                // variable-length integer
                 // TODO: decide best number type to visit here
-                visitor.visit_u64(try!(self.parse_vint()))
+                let val = try!(self.parse_vint());
+                println!("visiting vint: {:?}", val);
+                visitor.visit_u64(val)
             },
-            _ => return Err(Error::SyntaxError(ErrorCode::UnsupportedType(typeid), 0, 0)),
+            _ => {
+                println!("pre={:?}, post={:?}",
+                    &self.buffer[..self.offset],
+                    &self.buffer[self.offset..]);
+                Err(no_support)
+            }
         }
     }
 
@@ -343,32 +386,68 @@ impl serde::Deserializer for Deserializer {
         assert_eq!(length, len);
         visitor.visit_seq(TupleVisitor(self))
     }
-
 }
 
+#[derive(Copy, Clone)]
 enum StructVisitorState {
     KeyNext,
-    ValueNext,
+    ValueNext(&'static TypeInfo),
 }
+
+impl PartialEq for StructVisitorState {
+    fn eq(&self, other: &StructVisitorState) -> bool {
+        use self::StructVisitorState as SVS;
+        match (*self, *other) {
+            (SVS::KeyNext, SVS::KeyNext) => true,
+            (SVS::ValueNext(sti), SVS::ValueNext(oti)) => {
+                (sti as *const TypeInfo) == (oti as *const TypeInfo)
+            },
+            _ => false,
+        }
+    }
+}
+
+impl Eq for StructVisitorState {}
 
 struct StructVisitor<'a> {
     de: &'a mut Deserializer,
-    struct_def: Struct,
-    typeinfo_idx: usize,
     length: usize,
     offset: usize,
     state: StructVisitorState,
 }
 
 impl<'a> StructVisitor<'a> {
-    fn new(de: &'a mut Deserializer, struct_def: Struct, ti_idx: usize, length: usize) -> Self {
+    fn new(de: &'a mut Deserializer, length: usize) -> Self {
         StructVisitor {
             de: de,
-            struct_def: struct_def,
-            typeinfo_idx: ti_idx,
             length: length,
             offset: 0,
             state: StructVisitorState::KeyNext,
+        }
+    }
+
+    fn struct_def(&self) -> Result<Struct> {
+        match **self.de.typestack.last().unwrap() {
+            TypeInfo::Struct(ref st) => Ok(*st),
+            _ => Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
+        }
+    }
+
+    fn expect_state_key(&self) -> Result<()> {
+        match self.state {
+            StructVisitorState::KeyNext => Ok(()),
+            StructVisitorState::ValueNext(_) => {
+                panic!("internal failure");
+            }
+        }
+    }
+
+    fn expect_state_value(&self) -> Result<&'static TypeInfo> {
+        match self.state {
+            StructVisitorState::KeyNext => {
+                panic!("internal failure");
+            },
+            StructVisitorState::ValueNext(ti) => Ok(ti)
         }
     }
 }
@@ -381,70 +460,54 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
         where K: de::Deserialize,
               V: de::Deserialize,
     {
-        println!("------------");
         match try!(self.visit_key()) {
             Some(key) => {
                 let value = try!(self.visit_value());
-                println!("StructVisitor emits");
-                ::quux();
                 Ok(Some((key, value)))
             }
             None => Ok(None)
         }
     }
 
-
     fn visit_key<K>(&mut self) -> Result<Option<K>>
         where K: de::Deserialize,
     {
+        println!("visit_key; current_stack = {:?}", self.de.typestack);
         if self.length == self.offset {
             return Ok(None);
-        }  
-        println!("StructVisitor visit_key() :: offset = {:?}", self.de.offset);
-        match self.state {
-            StructVisitorState::KeyNext => {
-                self.state = StructVisitorState::ValueNext;
-            },
-            StructVisitorState::ValueNext => {
-                return Err(serde::de::Error::unknown_field(""));
-            },
         }
-        let tag: i32 = try!(self.de.parse_vint());
-        println!("StructVisitor visit_key() :2: offset = {:?}", self.de.offset);
+        try!(self.expect_state_key());
+        let need_tag: i32 = try!(self.de.parse_vint());
+        let struct_def = try!(self.struct_def());
 
-        de::Deserialize::deserialize(&mut TagDeserializer {
-            tag: tag,
-            struct_def: self.struct_def,
-        }).map(Some)
+        for &(name, next_type, tag) in struct_def.fields.iter() {
+            if need_tag == tag {
+                println!("VISIT KEY NAME {:?}", name);
+                let next_typeinfo: &'static TypeInfo = &self.de.typeinfos[next_type as usize];
+                self.state = StructVisitorState::ValueNext(next_typeinfo);
+                return de::Deserialize::deserialize(&mut StrVisitor(name)).map(Some)
+            }
+        }
+        Err(Error::SyntaxError(ErrorCode::InvalidTag(need_tag), 0, 0))
     }
 
     fn visit_value<V>(&mut self) -> Result<V>
         where V: de::Deserialize,
     {
-        println!("StructVisitor visit_value() :: offset = {:?}", self.de.offset);
-        match self.state {
-            StructVisitorState::KeyNext => {
-                return Err(serde::de::Error::unknown_field(""));
-            },
-            StructVisitorState::ValueNext => {
-                self.state = StructVisitorState::KeyNext;
-            },
-        }
-        let sidx = self.de.offset / 8;
-        let mut deserializer = Deserializer::new(
-            &self.de.buffer[sidx..],
-            self.de.typeinfos,
-            self.typeinfo_idx);
-        let rv = de::Deserialize::deserialize(&mut deserializer);
-        self.de.offset += deserializer.offset;
+        println!("visit_value; current_stack = {:?}", self.de.typestack);
+        let typeinfo = try!(self.expect_state_value());
+        self.state = StructVisitorState::KeyNext;
+        self.de.typestack.push(typeinfo);
+        println!("visit_value; stack << {:?} (will visit this type)", typeinfo);
         self.offset += 1;
+        let rv = de::Deserialize::deserialize(self.de);
+        self.de.typestack.pop().unwrap();
         rv
     }
 
     fn end(&mut self) -> Result<()> {
         if self.length != self.offset {
-            println!("StructVisitor: erroneous end");
-            return Err(serde::de::Error::unknown_field(""));
+            panic!("internal error: bad number of values iterated");
         }
         println!("StructVisitor ended");
         Ok(())
@@ -453,83 +516,76 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
     fn missing_field<V>(&mut self, _field: &'static str) -> Result<V>
         where V: de::Deserialize,
     {
+        panic!("literally what: {:?}", _field);
         let mut de = de::value::ValueDeserializer::into_deserializer(());
         Ok(try!(de::Deserialize::deserialize(&mut de)))
     }
 }
 
-pub struct TagDeserializer {
-    tag: i32,
-    struct_def: Struct,
+/// 
+struct ArrayVisitor<'a> {
+    de: &'a mut Deserializer,
+    length: usize,
+    offset: usize,
+    item_ti: &'static TypeInfo,
 }
 
-impl de::Deserializer for TagDeserializer {
+impl<'a> ArrayVisitor<'a> {
+    fn new(de: &'a mut Deserializer, length: usize, item_ti: &'static TypeInfo) -> Self {
+        ArrayVisitor {
+            de: de,
+            length: length,
+            offset: 0,
+            item_ti: item_ti,
+        }
+    }
+}
+
+impl<'a> de::SeqVisitor for ArrayVisitor<'a> {
+    type Error = Error;
+
+    fn visit<T>(&mut self) -> Result<Option<T>> where T: de::Deserialize {
+        if self.length == self.offset {
+            return Ok(None);
+        }
+        self.de.typestack.push(self.item_ti);
+        println!("ArrayVisitor type {:?} $$$$$$$$$ IN $$$$$$$$$ {:?}", self.item_ti, self.de.typestack);
+        let rv = de::Deserialize::deserialize(self.de);
+        println!("ArrayVisitor visited a type of {:?} successfully => {}", self.item_ti, rv.is_ok());
+        assert_eq!(self.de.typestack.pop().unwrap() as *const TypeInfo, self.item_ti as *const TypeInfo);
+        self.offset += 1;
+        rv.map(Some)
+    }
+
+    fn end(&mut self) -> Result<()> {
+        if self.length != self.offset {
+            panic!("internal error: bad number of values iterated");
+        }
+        println!("ArrayVisitor ended; popping");
+        Ok(())
+    }
+}
+
+/// just visits a string
+struct StrVisitor<'a>(&'a str);
+
+impl<'a> de::Deserializer for StrVisitor<'a> {
     type Error = Error;
 
     #[inline]
     fn visit<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
-        for &(name, _, tag) in self.struct_def.fields.iter() {
-            if tag == self.tag {
-                return visitor.visit_str(name);
-            }
-        }
-        panic!("INVALID TAG {} ON {:?}", self.tag, self.struct_def);
+        visitor.visit_str(self.0)
     }
 
-    fn visit_str<V>(&mut self, visitor: V) -> Result<V::Value> where V: de::Visitor {
-        panic!("TagDeserializer::visit_str");
+    fn visit_str<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
+        visitor.visit_str(self.0)
     }
 
     fn visit_string<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
-        ::quux();
-        for &(name, _, tag) in self.struct_def.fields.iter() {
-            if tag == self.tag {
-                return visitor.visit_str(name);
-            }
-        }
-        panic!("INVALID TAG {} ON {:?}", self.tag, self.struct_def);
+        visitor.visit_str(self.0)
     }
 }
 
-// pub struct TagVisitor {
-//     tag: i32,
-//     struct_def: Struct,
-// }
-
-// pub struct TypeInfoNameVisitor {
-//     ti: &'static TypeInfo,
-// }
-
-// impl Visitor for TypeInfoNameVisitor {
-//     type Value = &'str;
-
-//     #[inline]
-//     fn visit_i32<E>(&mut self, v: i64) -> Result<Self::Value, E> where E: de::Error {
-//         for field in self.ti.0.fields.iter() {
-//             if field.3 == v {
-//                 return Ok(TypeInfoName(field.0));
-//             }
-//         }
-//         Err(de::Error::unknown_field(""))
-//     }
-// }
-
-// pub struct TypeInfoName(pub &'static str);
-
-// impl Deserialize for TypeInfoName {
-//     fn deserialize<D>(deserializer: &mut D) -> Result<String, D::Error>
-//         where D: Deserializer,
-//     {   
-//         deserializer.visit_i32(TypeInfoNameVisitor {
-//             ti: ????,
-//         })
-//     }
-// }
-
-// struct TypeInfoTagDeserializer {
-//     de: &'a mut Deserializer,
-//     ti: &'static TypeInfo,
-// }
 
 trait PrimitiveInt: Sized {
     fn from_vint_buf(buffer: &[u8; 20]) -> result::Result<Self, ()>;

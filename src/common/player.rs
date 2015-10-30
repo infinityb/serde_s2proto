@@ -4,9 +4,11 @@ use super::color::Color;
 struct Blob(Vec<u8>);
 
 // 15405 -> 14
+#[derive(Debug)]
 struct FourCC([u8; 4]);
 
 // 15405 -> 17
+#[derive(Serialize, Deserialize, Debug)]
 struct Toon {
 	region: u8, // u8
 	program_id: FourCC,
@@ -15,10 +17,11 @@ struct Toon {
 }
 
 // 15405 -> 20
+#[derive(Serialize, Deserialize, Debug)]
 struct Player {
-	name: Blob,
+	name: String,
 	toon: Toon,
-	race: Blob,
+	race: String,
 	color: Color,
 	control: u8, // u8
 	team_id: u8, // u4
@@ -27,66 +30,54 @@ struct Player {
 	result: u8, // u4
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct FileContainer {
+	#[serde(rename="m_file")]
+	file: String,
+}
+
 // 15405 -> 32
+#[derive(Serialize, Deserialize, Debug)]
 struct ReplayDetails {
+	#[serde(rename="m_playerList")]
 	player_list: Option<Vec<Player>>,
-}
 
-struct ReplayDetailsField {
-	PlayerList,
-	Title,
-	Difficulty,
-	Thumbnail,
-	IsBlizzardMap,
-	TimeUtc,
-	TimeLocalOffset,
-	Description,
-	ImageFilePath,
-	MapFilePath,
-	CacheHandles,
-	MiniSave,
-	GameSpeed,
-	DefaultDifficulty,
-}
+	#[serde(rename="m_title")]
+	title: String,
 
-struct ReplayDetailsVisitor {
-	root_typeinfo: usize,
-	typeinfos: &'static [TypeInfo],
-}
+	#[serde(rename="m_difficulty")]
+	difficuly: u8,
 
-impl serde::de::Visitor for ReplayDetailsVisitor {
-    type Value = Color;
+	#[serde(rename="m_thumbnail")]
+	thumbnail: FileContainer,
 
-    fn visit_map<V>(&mut self, mut visitor: V) -> Result<Self::Value, V::Error>
-        where V: serde::de::MapVisitor
-    {
-    	let typeinfo = &self.typeinfos[self.root_typeinfo];
+	#[serde(rename="m_isBlizzardMap")]
+	is_blizzard_map: bool,
 
-        let mut player_list: Option<Option<Vec<Player>>> = None;
+	#[serde(rename="m_timeUTC")]
+	time_utc: i64,
 
-        loop {
-            match try!(visitor.visit_key()) {
-                Vint(0) => {
-                    a = Some(try!(visitor.visit_value()));
-                },
-                Some(ColorField::R) => {
-                    r = Some(try!(visitor.visit_value()));
-                },
-                Some(ColorField::G) => {
-                    g = Some(try!(visitor.visit_value()));
-                },
-                Some(ColorField::B) => {
-                    b = Some(try!(visitor.visit_value()));
-                },
-                None => { break; }
-            }
-        }
+	#[serde(rename="m_timeLocalOffset")]
+	time_local_offset: i64,
 
-        let a = try!(a.ok_or(V::Error::missing_field("m_a")));
-        let r = try!(r.ok_or(V::Error::missing_field("m_r")));
-        let g = try!(g.ok_or(V::Error::missing_field("m_g")));
-        let b = try!(b.ok_or(V::Error::missing_field("m_b")));
-        try!(visitor.end());
+	#[serde(rename="m_description")]
+	description: String,
+	
+	#[serde(rename="m_imageFilePath")]
+	image_file_path: String,
+	
+	#[serde(rename="m_mapFileName")]
+	map_filename: String,
 
-        Ok(Color { a: a, r: r, g: g, b: b })    }
+	#[serde(rename="m_cacheHandles")]
+	cache_handles: Option<Vec<String>>,
+
+	#[serde(rename="m_miniSave")]
+	mini_save: bool,
+
+	#[serde(rename="m_gameSpeed")]
+	game_speed: u8,
+
+	#[serde(rename="m_defaultDifficulty")]
+	default_difficulty: u8,
 }

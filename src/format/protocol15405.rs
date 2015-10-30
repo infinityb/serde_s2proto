@@ -5,9 +5,9 @@ use super::{
 };
 use phf::Map as PhfMap;
 
-pub static REPLAY_HEADER_TYPEID: u32 = 13;
-
-pub static GAME_EVENTID_TYPEID: u32 = 0;
+pub static REPLAY_HEADER_TYPEID: usize = 13;
+pub static GAME_EVENTID_TYPEID: usize = 0;
+pub static GAME_DETAILS_TYPEID: usize = 32;
 
 pub static GAME_EVENT_TYPES: PhfMap<u32, (u32, &'static str)> = phf_map! {
     5_u32 => (62, "NNet.Game.SUserFinishedLoadingSyncEvent"),
