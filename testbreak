@@ -1,0 +1,3 @@
+break rust_panic
+break quux
+run details_tests::json_deserialize

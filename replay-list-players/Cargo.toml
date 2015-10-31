@@ -1,0 +1,13 @@
+[package]
+name = "replay-list-players"
+version = "0.1.0"
+authors = ["Stacey Ell <stacey.ell@gmail.com>"]
+
+[dependencies.serde_s2proto]
+path = ".."
+
+[dependencies.mpq]
+path = "../mpq"
+
+[dependencies]
+serde = "*"

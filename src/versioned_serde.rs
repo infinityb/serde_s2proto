@@ -35,8 +35,6 @@ pub enum Error {
 
 impl serde::de::Error for Error {
     fn syntax(err_str: &str) -> Error {
-        // panic!("error str: {}", err_str);
-        ::quux();
         Error::SyntaxError(ErrorCode::Unknown, 0, 0)
     }
 
@@ -95,29 +93,6 @@ impl Deserializer {
         Ok(byte)
     }
 
-    // // TODO: generic over output ints
-    // fn read_bit(&mut self, bitlen: u8) -> Result<i64> {
-    //     if bitlen % 8 != 0 {
-    //         unimplemented!();
-    //     }
-    //     if self.offset % 8 != 0 {
-    //         unimplemented!();
-    //     }
-    //     let end = start + (bitlen / 8) as usize;
-    //     self.offset += bitlen as usize;
-
-    //     if self.buffer.len() < end{
-    //         return Err(Error::SyntaxError(ErrorCode::UnexpectedEOF, 0, 0));
-    //     }
-
-    //     let mut output: i64 = 0;
-    //     for i in start..end {
-    //         output = output << 8;
-    //         output += self.buffer[i] as i64;
-    //     }
-    //     Ok(output)
-    // }
-
     fn expect_skip(&mut self, expected: u8) -> Result<()> {
         let got = try!(self.read_byte());
         if got == expected {
@@ -144,21 +119,11 @@ impl Deserializer {
     }
 
     fn top_typeinfo(&self) -> Result<&'static TypeInfo> {
-        // it is a logic error to have an empty typestack
+        // TODO: make not panic
         let last_ti: &'static TypeInfo = *self.typestack.last().unwrap();
 
         Ok(last_ti)
     }
-
-    // fn last_typeinfo_as_struct(&self) -> Result<Struct> {
-    //     // it is a logic error to have an empty typestack
-    //     
-
-    //     match *last_ti {
-    //         TypeInfo::Struct(sd) => Ok(sd),
-    //         _ => Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
-    //     }
-    // }
 }
 
 impl serde::de::Deserializer for Deserializer {
@@ -170,15 +135,12 @@ impl serde::de::Deserializer for Deserializer {
     {
         let pre_offset = self.offset;
         let typeid = try!(self.read_byte());
-        println!("deserializer found a type id of {:?} at offset {}", typeid, pre_offset);
         let no_support = Error::SyntaxError(ErrorCode::UnsupportedType(typeid), 0, 0);
         match typeid {
             0x00 => {
                 // array
                 let length = try!(self.parse_vint::<u32>()) as usize;
-                println!("visiting array of length {}", length);
                 let start = self.offset;
-                println!("array data = {:?}", &self.buffer[start..]);
 
                 let opt_typinfo = try!(self.top_typeinfo());
                 let typeid = match *opt_typinfo {
@@ -186,7 +148,6 @@ impl serde::de::Deserializer for Deserializer {
                     _ => return Err(Error::SyntaxError(ErrorCode::UnexpectedType, 0, 0)),
                 };
                 let typeinfo: &'static TypeInfo = &self.typeinfos[typeid as usize];
-                println!("ArrayVisitor will visit types of : {:?}", typeinfo);
                 visitor.visit_seq(ArrayVisitor::new(self, length, typeinfo))
             }
             0x01 => {
@@ -196,7 +157,6 @@ impl serde::de::Deserializer for Deserializer {
             0x02 => {
                 // blob
                 let length = try!(self.parse_vint::<u32>()) as usize;
-                println!("visiting blob of length {}", length);
                 let start = self.offset;
                 self.offset += length;
                 let buf = &self.buffer[start..self.offset];
@@ -210,13 +170,11 @@ impl serde::de::Deserializer for Deserializer {
             },
             0x03 => {
                 // choice aka enum
-                println!("visiting choice");
                 Err(no_support)
             },
             0x04 => {
                 // optional
                 let is_some = try!(self.read_byte()) != 0;
-                println!("visiting option - is_some? => {}", is_some);
                 if !is_some {
                     return visitor.visit_none();
                 }
@@ -228,7 +186,6 @@ impl serde::de::Deserializer for Deserializer {
                 };
 
                 let typeinfo: &'static TypeInfo = &self.typeinfos[typeid as usize];
-                println!("  visiting option : next type = {:?}", typeinfo);
                 self.typestack.push(typeinfo);
                 let result = visitor.visit_some(self);
                 assert_eq!(self.typestack.pop().unwrap() as *const TypeInfo, typeinfo as *const TypeInfo);
@@ -236,7 +193,6 @@ impl serde::de::Deserializer for Deserializer {
             }
             0x05 => {
                 let length = try!(self.parse_vint::<u32>()) as usize;
-                println!("visiting struct of length {}", length);
                 visitor.visit_map(StructVisitor::new(self, length))
             },
             0x06 => {
@@ -250,7 +206,6 @@ impl serde::de::Deserializer for Deserializer {
                 let buf = &self.buffer[start..self.offset];
 
                 let buffer = format!("{:?}", buf);
-                println!("new fourcc = {:?}", buffer);
                 visitor.visit_string(buffer)
             },
             0x08 => {
@@ -261,15 +216,9 @@ impl serde::de::Deserializer for Deserializer {
                 // variable-length integer
                 // TODO: decide best number type to visit here
                 let val = try!(self.parse_vint());
-                println!("visiting vint: {:?}", val);
                 visitor.visit_u64(val)
             },
-            _ => {
-                println!("pre={:?}, post={:?}",
-                    &self.buffer[..self.offset],
-                    &self.buffer[self.offset..]);
-                Err(no_support)
-            }
+            _ => Err(no_support),
         }
     }
 
@@ -472,7 +421,6 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
     fn visit_key<K>(&mut self) -> Result<Option<K>>
         where K: de::Deserialize,
     {
-        println!("visit_key; current_stack = {:?}", self.de.typestack);
         if self.length == self.offset {
             return Ok(None);
         }
@@ -482,7 +430,6 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
 
         for &(name, next_type, tag) in struct_def.fields.iter() {
             if need_tag == tag {
-                println!("VISIT KEY NAME {:?}", name);
                 let next_typeinfo: &'static TypeInfo = &self.de.typeinfos[next_type as usize];
                 self.state = StructVisitorState::ValueNext(next_typeinfo);
                 return de::Deserialize::deserialize(&mut StrVisitor(name)).map(Some)
@@ -494,11 +441,9 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
     fn visit_value<V>(&mut self) -> Result<V>
         where V: de::Deserialize,
     {
-        println!("visit_value; current_stack = {:?}", self.de.typestack);
         let typeinfo = try!(self.expect_state_value());
         self.state = StructVisitorState::KeyNext;
         self.de.typestack.push(typeinfo);
-        println!("visit_value; stack << {:?} (will visit this type)", typeinfo);
         self.offset += 1;
         let rv = de::Deserialize::deserialize(self.de);
         self.de.typestack.pop().unwrap();
@@ -509,14 +454,12 @@ impl<'a> de::MapVisitor for StructVisitor<'a> {
         if self.length != self.offset {
             panic!("internal error: bad number of values iterated");
         }
-        println!("StructVisitor ended");
         Ok(())
     }
 
     fn missing_field<V>(&mut self, _field: &'static str) -> Result<V>
         where V: de::Deserialize,
     {
-        panic!("literally what: {:?}", _field);
         let mut de = de::value::ValueDeserializer::into_deserializer(());
         Ok(try!(de::Deserialize::deserialize(&mut de)))
     }
@@ -549,9 +492,7 @@ impl<'a> de::SeqVisitor for ArrayVisitor<'a> {
             return Ok(None);
         }
         self.de.typestack.push(self.item_ti);
-        println!("ArrayVisitor type {:?} $$$$$$$$$ IN $$$$$$$$$ {:?}", self.item_ti, self.de.typestack);
         let rv = de::Deserialize::deserialize(self.de);
-        println!("ArrayVisitor visited a type of {:?} successfully => {}", self.item_ti, rv.is_ok());
         assert_eq!(self.de.typestack.pop().unwrap() as *const TypeInfo, self.item_ti as *const TypeInfo);
         self.offset += 1;
         rv.map(Some)
@@ -561,7 +502,6 @@ impl<'a> de::SeqVisitor for ArrayVisitor<'a> {
         if self.length != self.offset {
             panic!("internal error: bad number of values iterated");
         }
-        println!("ArrayVisitor ended; popping");
         Ok(())
     }
 }
@@ -574,15 +514,18 @@ impl<'a> de::Deserializer for StrVisitor<'a> {
 
     #[inline]
     fn visit<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
-        visitor.visit_str(self.0)
+        let res0: Result<V::Value> = visitor.visit_str(self.0);
+        res0.or_else(|_| visitor.visit_bytes(self.0.as_bytes()))
     }
 
     fn visit_str<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
-        visitor.visit_str(self.0)
+        let rv = visitor.visit_str(self.0);
+        rv
     }
 
     fn visit_string<V>(&mut self, mut visitor: V) -> Result<V::Value> where V: de::Visitor {
-        visitor.visit_str(self.0)
+        let rv = visitor.visit_str(self.0);
+        rv
     }
 }
 
@@ -602,7 +545,6 @@ impl PrimitiveInt for i32 {
         let mut bits = 6;
 
         while (item.1 & 0x80) != 0 && item.0 < buffer.len() {
-            println!("item = {:?}, item.1 & 0x80 = {:?}", item, item.1 & 0x80);
             item = byte_iter.next().unwrap();
             result = result | (item.1 as i32 & 0x7f) << bits;
             bits += 7;
@@ -647,7 +589,6 @@ impl PrimitiveInt for u8 {
 
         let mut item = byte_iter.next().unwrap();
         let (_, byte) = item;
-        println!("read byte = {:?}", byte);
 
         if (byte & 1) == 1 {
             return Err(())
@@ -658,13 +599,11 @@ impl PrimitiveInt for u8 {
         while (item.1 & 0x80) != 0 && item.0 < buffer.len() {
             item = byte_iter.next().unwrap();
             let (_, byte) = item;
-            println!("read byte = {:?}", byte);
-            println!("bits = {}", bits);
             result = result | ((byte as u64 & 0x7f) << bits);
             bits += 7;
         }
         if result > 0xFF {
-            println!("WARN: overflow!!");
+            panic!("BUG?: overflow!!");
         }
 
         Ok((result & 0xFF) as u8)

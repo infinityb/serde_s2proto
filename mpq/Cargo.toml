@@ -5,3 +5,4 @@ authors = ["Stacey Ell <stacey.ell@gmail.com>"]
 
 [dependencies]
 byteorder = "*"
+bzip2 = "0.2"
